@@ -11,7 +11,7 @@ from rclpy.qos import (
 )
 
 class SubscribersNode(Node):
-
+    
     latch_msg = None
     sensor_msg = None
     shallow_msg = None
