@@ -34,13 +34,16 @@ class ObstacleAvoidanceNode(Node):
         robot_width = 0.23
         safety_margin = 0.05
         self.required_gap = robot_width + 2 * safety_margin
-        self.stop_distance = 0.9
+        self.stop_distance = 0.75 # og:0.9
         self.look_ahead = 1.5
 
         self.avoiding = False
         self.clear_count = 0
         self.gap_heading = None
-        self.side = 0
+
+        self.gap_side = -1   # -1 = start with right, +1 = start with left
+        self.side = 0        # emergency sidestep direction
+
         self.side_lock_count = 0
         self.missing_count = 0
         self.last_command = (0.0, 0.0)
@@ -158,6 +161,7 @@ class ObstacleAvoidanceNode(Node):
     
     """
     def timer_callback(self):
+        
         if self.last_scan is None:
             return
 
@@ -170,10 +174,11 @@ class ObstacleAvoidanceNode(Node):
         targets = []
 
         # Check the space directly in front of the robot.
+        front_clearance = 0.12
         blocked = np.any(
             (points[:, 0] > 0)
             & (points[:, 0] < self.stop_distance)
-            & (np.abs(points[:, 1]) < self.required_gap / 2)
+            & (np.abs(points[:, 1]) < front_clearance)
         )
 
         if not blocked:
@@ -188,6 +193,7 @@ class ObstacleAvoidanceNode(Node):
                 self.avoiding = False
                 self.clear_count = 0
                 self.gap_heading = None
+                
                 self.side = 0
                 self.side_lock_count = 0
                 self.missing_count = 0
@@ -220,6 +226,7 @@ class ObstacleAvoidanceNode(Node):
             self.last_command = (vx, vy)
 
         self.show_decision(points, targets, target)
+        print(f"Moving to x={vx}, y={vy}")
         self.move_2D(x=vx, y=vy, turn=0.0)
 
     def get_front_scan(self, scan):
@@ -263,6 +270,13 @@ class ObstacleAvoidanceNode(Node):
             if midpoint[0] <= 0 or distance == 0:
                 continue
 
+            heading = np.arctan2(midpoint[1], midpoint[0])
+
+            # Don't consider gaps that are mostly beside the robot
+            #this was the change that helped it to get out of the loop
+            if abs(heading) > np.deg2rad(60):
+                continue
+
             direction = midpoint / distance
             # Measure the gap across the direction we want to travel.
             width = abs(direction[0] * gap[1] - direction[1] * gap[0])
@@ -285,36 +299,38 @@ class ObstacleAvoidanceNode(Node):
 
     def choose_gap(self, targets):
         if not targets:
-            self.missing_count += 1
             return None
 
-        # Find the gap closest to straight ahead.
-        best_angle, best_target = targets[0]
-        for angle, target in targets:
-            if angle < best_angle:
-                best_angle = angle
-                best_target = target
-
-        if self.gap_heading is None:
-            return best_target
-
-        # Prefer the gap we were already following.
-        smallest_change = float("inf")
-        matching_target = None
+        # First check if there is a gap almost straight ahead
         for _, target in targets:
-            heading = np.arctan2(target[1], target[0])
-            change = abs(heading - self.gap_heading)
-            if change < smallest_change:
-                smallest_change = change
-                matching_target = target
+            if abs(target[1]) < 0.15:
+                self.side = 0
+                print(f"Straight ahead target: {target}")
+                return target
 
-        if smallest_change <= np.deg2rad(30):
-            self.missing_count = 0
-            return matching_target
+        # If no straight gap, choose the opposite side
+        wanted_side = self.gap_side
 
-        self.missing_count += 1
-        if self.missing_count >= 4:
+        possible = []
+
+        for _, target in targets:
+            if target[1] * wanted_side > 0:
+                possible.append(target)
+
+        if possible:
+            # Pick the gap closest to straight ahead
+            best_target = possible[0]
+
+            for target in possible:
+                if abs(np.arctan2(target[1], target[0])) < abs(
+                    np.arctan2(best_target[1], best_target[0])
+                ):
+                    best_target = target
+
+            #self.gap_side *= -1
+            print(f"Best Target: {best_target}")
             return best_target
+
         return None
 
     def get_sidestep_command(self, points, angles, ranges):
