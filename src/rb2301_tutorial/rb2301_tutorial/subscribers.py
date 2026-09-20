@@ -7,6 +7,7 @@ from rclpy.qos import (
     QoSProfile,
     HistoryPolicy,
     DurabilityPolicy,
+    ReliabilityPolicy,
     qos_profile_sensor_data
 )
 
@@ -23,17 +24,29 @@ class SubscribersNode(Node):
         qos_profile_latch = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=5,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE
+        )
+
+        # Custom QoS Profile
+        qos_profile_shallow = QoSProfile(
+           history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE
         )
         # how long the timer_callback will 
         # block other callbacks for (sec)
-        self.timer_wait = 0.0
+        self.timer_wait = 1.0
 
         # Handlers
         self.timer = self.create_timer(0.1, self.timer_callback)
         self.sensor_sub = self.create_subscription(Header, '/sensor', self.sensor_sub_callback, qos_profile_sensor_data)
         self.latch_sub = self.create_subscription(
             Header, '/latch', self.latch_sub_callback, qos_profile_latch
+        )
+        self.shallow_sub = self.create_subscription(
+            Header, '/sensor', self.shallow_sub_callback, qos_profile_shallow
         )
 
     def latch_sub_callback(self, msg):

@@ -5,6 +5,7 @@ from rclpy.qos import (
     QoSProfile,
     HistoryPolicy,
     DurabilityPolicy,
+    ReliabilityPolicy,
     qos_profile_sensor_data
 )
 class PublishersNode(Node):
@@ -19,7 +20,8 @@ class PublishersNode(Node):
         qos_profile_latch = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=5,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
         )
         self.i = 0
 
