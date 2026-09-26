@@ -7,13 +7,7 @@ from launch_ros.substitutions import FindPackageShare
 from launch.actions import SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, TextSubstitution, Command
 
-import sys, os
-sys.path.insert(2, os.path.dirname(os.path.realpath(__file__))[:-17]+'/rb2301_ca1/rb2301_ca1')
-print(os.path.dirname(os.path.realpath(__file__))[:-17])
-import obstacle_generator 
-
 def generate_launch_description():
-    obstacle_generator.generate_sdf_file()
     ld = LaunchDescription()
     pkg_rb2301_gz = FindPackageShare('rb2301_gz') 
     pkg_ros_gz_sim = FindPackageShare('ros_gz_sim')
@@ -40,7 +34,7 @@ def generate_launch_description():
     arg_world = DeclareLaunchArgument(
         'world', 
         # default_value='empty.sdf',
-        default_value='obstacle_world_ca1.sdf', # RB2301 CA1 Obstacles
+        default_value='path_planning_world_ca2.sdf', # RB2301 Path-Planning
         description='Name of the Gazebo world file to load'
     )
     path_world = PathJoinSubstitution([
@@ -61,6 +55,16 @@ def generate_launch_description():
     )
     ld.add_action(robot_state_publisher_node)
 
+
+    # publishes the static tf betw. map and odom (bcos no localization)
+    node_static_tf_publisher = Node(
+        package = 'tf2_ros', 
+        executable = 'static_transform_publisher',
+        name = 'static_transform_publisher',
+        arguments = ['0', '0', '0', '0', '0', '0', '/map', '/odom'])
+    ld.add_action(node_static_tf_publisher)
+
+    
     # launch Gz Harmonic
     launch_gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
@@ -78,7 +82,7 @@ def generate_launch_description():
     )
     ld.add_action(launch_gz_sim)
     
-    x_arg = DeclareLaunchArgument('x', default_value='0.0', description='Initial x-coordinates within maze')
+    x_arg = DeclareLaunchArgument('x', default_value='0.05', description='Initial x-coordinates within maze')
     y_arg = DeclareLaunchArgument('y', default_value='0.0', description='Initial y-coordinates within maze')
     yaw_arg = DeclareLaunchArgument('yaw', default_value='0.0', description='Initial yaw rotation (in radians) within maze' )
     ld.add_action(x_arg)
@@ -117,7 +121,7 @@ def generate_launch_description():
             "/tf@tf2_msgs/msg/TFMessage@gz.msgs.Pose_V",
             "/scan@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan",
             "/imu@sensor_msgs/msg/Imu@gz.msgs.IMU",
-            "/world/empty/dynamic_pose/info@tf2_msgs/msg/TFMessage@gz.msgs.Pose_V", # This topic publishes ground-truth pose of the gz sim actors
+            # "/world/empty/dynamic_pose/info@tf2_msgs/msg/TFMessage@gz.msgs.Pose_V", # This topic publishes ground-truth pose of the gz sim actors. No need since we have odom
         ],
         output="screen",
         parameters=[
@@ -125,6 +129,15 @@ def generate_launch_description():
         ]
     )
     ld.add_action(gz_bridge_node)
+
+    # # rviz
+    # node_rviz = Node(
+    #     package='rviz2',
+    #     executable='rviz2',
+    #     arguments=['-d', PathJoinSubstitution([pkg_rb2301_gz, 'rviz', 'ca2.rviz']),],
+    #     output='screen'
+    # )
+    # ld.add_action(node_rviz)
 
     return ld
 

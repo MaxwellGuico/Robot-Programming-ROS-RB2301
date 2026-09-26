@@ -7,7 +7,6 @@ from sensor_msgs.msg import LaserScan
 
 # Libraries for easier visualisation what the robot is doing in gazebo
 from geometry_msgs.msg import Twist, Point 
-from visualization_msgs.msg import Marker, MarkerArray
 
 np.set_printoptions(
     2, suppress=True
@@ -28,8 +27,6 @@ class ObstacleAvoidanceNode(Node):
 
         self.last_scan = None
         self.last_angles = None
-
-        self.pub_debug = self.create_publisher(MarkerArray, "debug_markers",10) # Easier visual debugging
 
         robot_width = 0.23
         safety_margin = 0.05
@@ -60,104 +57,15 @@ class ObstacleAvoidanceNode(Node):
         twist_msg.angular.x, twist_msg.angular.y, twist_msg.angular.z = 0.0, 0.0, float(turn)
         self.pub_cmd_vel.publish(twist_msg)
 
-    # Helper function to publish visualisation points
-    def show_decision(self, obstacle_points, possible_targets, chosen_target):
-        markers = MarkerArray()
-
-        # Remove markers from the previous decision.
-        clear = Marker()
-        clear.action = Marker.DELETEALL
-        markers.markers.append(clear)
-
-        stamp = self.get_clock().now().to_msg()
-
-        # Red: LiDAR obstacle points
-        obstacles = Marker()
-        obstacles.header.frame_id = "base_link"
-        obstacles.header.stamp = stamp
-        obstacles.ns = "obstacles"
-        obstacles.id = 0
-        obstacles.type = Marker.SPHERE_LIST
-        obstacles.action = Marker.ADD
-        obstacles.scale.x = 0.04
-        obstacles.scale.y = 0.04
-        obstacles.scale.z = 0.04
-        obstacles.color.r = 1.0
-        obstacles.color.a = 1.0
-
-        for x, y in obstacle_points:
-            obstacles.points.append(
-                Point(x=float(x), y=float(y), z=0.1)
-            )
-
-        markers.markers.append(obstacles)
-
-        # Yellow: gap midpoints considered by the controller
-        candidates = Marker()
-        candidates.header.frame_id = "base_link"
-        candidates.header.stamp = stamp
-        candidates.ns = "gap_candidates"
-        candidates.id = 1
-        candidates.type = Marker.SPHERE_LIST
-        candidates.action = Marker.ADD
-        candidates.scale.x = 0.08
-        candidates.scale.y = 0.08
-        candidates.scale.z = 0.08
-        candidates.color.r = 1.0
-        candidates.color.g = 1.0
-        candidates.color.a = 1.0
-
-        for _, midpoint in possible_targets:
-            candidates.points.append(
-                Point(
-                    x=float(midpoint[0]),
-                    y=float(midpoint[1]),
-                    z=0.12
-                )
-            )
-
-        markers.markers.append(candidates)
-
-        # Green: direction selected by the controller
-        if chosen_target is not None:
-            arrow = Marker()
-            arrow.header.frame_id = "base_link"
-            arrow.header.stamp = stamp
-            arrow.ns = "chosen_direction"
-            arrow.id = 2
-            arrow.type = Marker.ARROW
-            arrow.action = Marker.ADD
-
-            arrow.points = [
-                Point(x=0.0, y=0.0, z=0.15),
-                Point(
-                    x=float(chosen_target[0]),
-                    y=float(chosen_target[1]),
-                    z=0.15
-                ),
-            ]
-
-            # Shaft diameter, head diameter and head length
-            arrow.scale.x = 0.025
-            arrow.scale.y = 0.06
-            arrow.scale.z = 0.08
-
-            arrow.color.g = 1.0
-            arrow.color.a = 1.0
-
-            markers.markers.append(arrow)
-
-        self.pub_debug.publish(markers)
-
     def sub_scan_callback(self, msg):
         self.last_scan = np.array(msg.ranges)[::4]  # 2 degree given N = 720, step =4 
        
     """
-    LiDAR index 0       approximately -180° → robot front
-    LiDAR index 45      approximately  -90° → robot left
-    LiDAR index 90                    0° → robot back
-    LiDAR index 135     approximately +90° → robot right
-    LiDAR index 179     approximately +178° → robot front
+    LiDAR index 0       approximately -180  robot front
+    LiDAR index 45      approximately  -90  robot left
+    LiDAR index 90                      0   robot back
+    LiDAR index 135     approximately  +90  robot right
+    LiDAR index 179     approximately +178  robot front
     
     """
     def timer_callback(self):
@@ -225,7 +133,7 @@ class ObstacleAvoidanceNode(Node):
 
             self.last_command = (vx, vy)
 
-        self.show_decision(points, targets, target)
+       
         print(f"Moving to x={vx}, y={vy}")
         self.move_2D(x=vx, y=vy, turn=0.0)
 
@@ -273,7 +181,7 @@ class ObstacleAvoidanceNode(Node):
             heading = np.arctan2(midpoint[1], midpoint[0])
 
             # Don't consider gaps that are mostly beside the robot
-            #this was the change that helped it to get out of the loop
+            # this was the change that helped it to get out of the loop
             if abs(heading) > np.deg2rad(60):
                 continue
 

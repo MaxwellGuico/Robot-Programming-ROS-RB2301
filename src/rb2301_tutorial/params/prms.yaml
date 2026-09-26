@@ -1,0 +1,11 @@
+parameters:
+  ros__parameters:
+    values:
+      bool_v: False
+      int_v: 9
+      dbl_v: 69.0
+      str_v: 'Guico'
+    bool_arr_v: [True,False]
+    int_arr_v: [8,6,9]
+    dbl_arr_v: [4.0,3.0,4.5]
+    str_arr_v: ['Maxwell','Timothy','Ebora','Guico']
