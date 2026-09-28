@@ -87,6 +87,19 @@ def load_irl_config(maze_index:int) -> dict:
     }
 
 
+class SearchNode:
+    '''SearchNode is a helper class for Astar Function'''
+    def __init__(self,cell,g,h,parent=None):
+
+        self.cell = cell # Cell is (i,j) in Grid Coordinates
+        self.g = g # Cost to go from start to the current cell
+        self.h = h # Heuristic cost from the goal to the current cell
+        self.f = g + h
+        self.parent = parent # This is for path reconstruction
+    def cost(self):
+        return self.f
+
+        
 class WaypointNode(Node):
     '''Node to calculate path and move robot towards given goal_coordinates, using pose info from either gazebo odometer or optitrack'''
     def __init__(self, map_array:np.array, goal_list:list, is_simulation:bool=True, origin:tuple=(0.0, 0.0), resolution:float=occupancy_grid_resolution):
@@ -109,7 +122,7 @@ class WaypointNode(Node):
                 )
 
         self.publisher_ = self.create_publisher(Twist, 'cmd_vel', 10) # Publish to cmd_vel node
-        self.timer = self.create_timer(0.05, self.timer_callback)  # Runs at 20Hz. Can be changed.
+        self.timer = self.create_timer(0.05, self.timer_callback)  # Runs at 20Hz. Can be changed. 0.05
 
         self.goal_list = goal_list
         self.map_array = map_array
@@ -118,7 +131,15 @@ class WaypointNode(Node):
 
         self.pose = None
         self.path = [] # Set this to your planned route (a list of grid-index tuples, in travel order) once you've computed it -- it'll automatically show up in the terminal map print
+        self.simplified_points = [] # Reduced points
         self._last_printed_path = None
+        '''Tracking the indices of goal_index and waypoint_index from self.path'''
+        self.goal_idx = -1
+        self.waypoints = []
+        self.current_waypoint_idx = 0
+        self.goal_reached = True
+        
+
 
     def print_map(self):
         '''Prints the occupancy grid to the terminal: walls, your current position ('S'), all goal points ('W'/'G'),
@@ -132,6 +153,8 @@ class WaypointNode(Node):
         goal_cells = [clip(world_to_grid(gx, gy, self.origin, self.resolution)) for gx, gy in self.goal_list]
         grid = Grid(self.map_array, starting_position=current_cell, goal_position=goal_cells[-1])
         grid.print_grid_map(waypoints=goal_cells, path=self.path)
+        # ADDED THIS
+        grid.draw_grid_map(simplified_points=self.simplified_points,waypoints=goal_cells,path=self.path,save_path='path_result.png')
 
     def yaw_from_quaternion(self, q):
         '''Returns yaw angle (in rad) for orientation based on given quaternion input q'''
@@ -170,6 +193,7 @@ class WaypointNode(Node):
         self.goal_reached = False
         self.waypoints = waypoints
         self.current_waypoint_idx = 0
+        
 
     def timer_callback(self):
         """Controller loop. Insert path planning and PID control logic here"""
@@ -177,13 +201,147 @@ class WaypointNode(Node):
             return # Does not run if no pose received from Odom or Optitrack
         self.get_logger().debug(f"Pose: {self.pose}")
 
+        # New goal
+            # Make new path
+            # self.goal_reached = False
+        # Still same goal
+            #Continue waypoints
+            # Increase current_waypoint idx
+            # Check if pose is goal
+                #if it is set goal_reached=True
+        robot_point = (self.pose[0],self.pose[1])
+        if not self.goal_reached and self.path:
+            current_waypoint = self.waypoints[self.current_waypoint_idx]
+            world_point = grid_to_world(current_waypoint[0],current_waypoint[1],origin=self.origin)
+            Ks = 4
+            K_theta = 1
+            
+            Vx = Ks*(world_point[0]-robot_point[0])
+            Vy = Ks*(world_point[1]-robot_point[1])
+            w = K_theta * (0-np.deg2rad(self.pose[2]))
+            print(f"Moving (Vx={Vx},Vy={Vy}, w = {w})")
+            self.move_2D(Vx,Vy,w)
+            if abs(world_point[0]-robot_point[0]) < 0.05 and abs(world_point[1]-robot_point[1]) < 0.05 and self.current_waypoint_idx < len(self.waypoints)-1:
+                self.current_waypoint_idx += 1
+            if abs(self.goal_list[self.goal_idx][0]-robot_point[0]) < 0.05 and abs(self.goal_list[self.goal_idx][1]-robot_point[1]) < 0.05:
+                self.goal_reached = True
+                self.move_2D(0,0)
+        else:
+            if self.goal_idx < len(self.goal_list) - 1:
+                self.goal_idx += 1 
+                curr_grid = world_to_grid(self.pose[0],self.pose[1],origin=self.origin)
+                goal_grid = world_to_grid(self.goal_list[self.goal_idx][0],self.goal_list[self.goal_idx][1],origin=self.origin)
+                self.path = self.Astar(curr_grid,goal_grid)
+                self.simplified_points = self.simplify_path(self.path)
+                self.set_waypoints(self.simplified_points)
+                self.goal_reached = False
+            else:
+                self.move_2D(0,0)
+
+            
+            
         if self.path != self._last_printed_path: # Prints once immediately (map + start + goals), then again each time self.path changes
             self.print_map()
             self._last_printed_path = list(self.path)
 
-        ###### INSERT CODE HERE ######
-        self.move_2D(0.5)
-        ###### INSERT CODE HERE ######
+        # Next thing to working on
+        # 1. Yaw accumulation of drift
+        # 2. Simplify path
+    def reconstruct_path(self,current:SearchNode):
+        path = []
+        while current is not None:
+            path.append(current.cell)
+            current = current.parent
+        return path[::-1] # The first node is the goal node, the last node is the next point to go to
+
+    def simplify_path(self,path:list):
+        if not path: # Edge case: Empty list recieved
+            return []
+        if len(path) == 1: # Edge case: 1 Point only
+            return path
+        path_idx = 1
+        new_path = [path[path_idx-1]]
+        
+        while path_idx < len(path) - 1:
+            prev_node = np.array(path[path_idx-1])
+            current_node = np.array(path[path_idx])
+            next_node = np.array(path[path_idx+1])
+            din = prev_node-current_node
+            dout = current_node-next_node
+            if not np.array_equal(din,dout): 
+            # Compare the change, 
+            # if there is a difference in the direction of increment
+            # din changes in x, dout changes in y, means its an actual waypoint to go to.
+                new_path.append(path[path_idx])
+            path_idx += 1
+        new_path.append(path[-1])
+        return new_path # I also edited the draw_grid and _colors function to reflect the path more accurately
+    
+    def Astar(self,start:tuple, goal:tuple):
+        def heuristic(start:tuple,goal:tuple):
+            '''Chosen heuristic is manhattan distance'''
+            return abs(goal[0]-start[0]) + abs(goal[1]-start[1])
+        def cost(node:SearchNode):
+            return node.cost()
+        start_node = SearchNode(cell=start,g=0,h=heuristic(start,goal),parent=None)
+        
+        
+        openList = [start_node] # List of SearchNode
+        closedList = [] # List of SearchNode
+
+        
+
+        grid_size_x = self.map_array.shape[0]
+        grid_size_y = self.map_array.shape[1]
+
+        while openList:
+            '''Get node with loweset f value'''
+            current = openList[0] # Revist this, right now it assumes that the first one is the best f value
+
+            # Check if we have reached the goal
+            if current.cell == goal:
+                return self.reconstruct_path(current)
+
+            # Move current node to the closed list
+            openList.remove(current)
+            closedList.append(current)
+
+            # Check all neighbouring nodes
+            '''Check the 4 directions of cell, reject index that are negative or outside of grid size'''
+            
+            neighbour_up = (current.cell[0] + 1, current.cell[1]) if grid_size_x > (current.cell[0] + 1) >= 0 else None
+            neighbour_down = (current.cell[0] - 1, current.cell[1]) if grid_size_x > (current.cell[0] - 1) >= 0 else None
+            neighbour_left = (current.cell[0], current.cell[1] + 1) if grid_size_y > (current.cell[1] + 1) >= 0 else None
+            neighbour_right = (current.cell[0], current.cell[1] - 1) if grid_size_y > (current.cell[1] - 1) >= 0 else None
+            neighbours = [neighbour_up,neighbour_down,neighbour_left,neighbour_right]
+
+            for neighbour in neighbours:
+                if neighbour is None:
+                    continue # Skip invalid index nodes
+                if any(neighbour == node.cell for node in closedList):
+                    continue # Skip evaluated node
+
+                # calculate tentative g score
+                tentative_g = current.g + 1 # Plus one since we are only looking at 4 directions one cell difference
+
+                for node in openList:
+                    if node.cell == neighbour:
+                        if tentative_g <= node.g:
+                            node.g = tentative_g
+                            node.f = node.g + node.h
+                            node.parent = current
+
+                if not any(neighbour == node.cell for node in openList) and self.map_array[neighbour] == 0: 
+                    '''check if neighbour is in NOT in open list and is a free cell'''
+                    neighbourNode = SearchNode(parent=current,cell=neighbour,g=tentative_g,h=heuristic(neighbour, goal))
+                    openList.append(neighbourNode)
+
+            openList.sort(key=cost)
+        return [] # Failure case
+                
+    
+
+
 
 
 class Grid():
@@ -252,7 +410,7 @@ class Grid():
         else:
             return False
 
-    def _colour_grid(self, waypoints:list=(), path:list=(), obstacle_threshold:float=50) -> np.array:
+    def _colour_grid(self, simplified_points:list=(), waypoints:list=(), path:list=(), obstacle_threshold:float=50) -> np.array:
         '''Builds the (H, W, 3) colour image array shared by draw_grid_map. Maze walls in blue, empty space in white, path taken in green and waypoints in red'''
         image_grid = np.ones((self.grid.shape[0],self.grid.shape[1],3), dtype=np.uint8)
         image_grid[self.grid <= obstacle_threshold] = (255,255,255)
@@ -260,13 +418,14 @@ class Grid():
 
         for x, y in path:
             image_grid[x][y] = (0,255,0)
-
+        for x, y in simplified_points:
+                image_grid[x][y] = (125,0,125)
         for point in waypoints:
             image_grid[point] = (255,0,0)
 
         return image_grid
 
-    def draw_grid_map(self, waypoints:list=(), path:list=(), obstacle_threshold:float=50, save_path:str=None, show:bool=True):
+    def draw_grid_map(self,simplified_points:list = (), waypoints:list=(), path:list=(), obstacle_threshold:float=50, save_path:str=None, show:bool=True):
         '''Creates an image of the maze and path taken. Maze walls in blue, empty space in white, path taken in green and waypoints in red
 
         Args:
@@ -276,7 +435,7 @@ class Grid():
             save_path : Optional file path (e.g. "path_result.png") to save the image to, in addition to/instead of showing it
             show : Whether to pop up the image in a viewer (default True). Set to False if you only want to save it
         '''
-        image_grid = self._colour_grid(waypoints, path, obstacle_threshold)
+        image_grid = self._colour_grid(simplified_points, waypoints, path, obstacle_threshold)
 
         image_grid = np.flip(image_grid, axis=1)[::-1]
         img = Image.fromarray(image_grid, 'RGB')
@@ -366,7 +525,6 @@ def main(args=None):
 
     map_array = np.load(os.path.join(_PACKAGE_DIR, config["map_file"]), allow_pickle=True)
     waypoint = WaypointNode(map_array, config["goal_list"], is_simulation, config["origin"], config["resolution"])
-
     # Start spinning the waypoint node and only stop once SystemExit error is raised within the node callback
     try:
         rclpy.spin(waypoint)
