@@ -1,0 +1,243 @@
+digraph CA1TimerCallback {
+    graph [
+        label="CA1 timer_callback() control flow (20 Hz)",
+        labelloc="t",
+        labeljust="c",
+        fontsize=24,
+        fontname="DejaVu Sans Bold",
+        bgcolor="white",
+        pad=0.35,
+        margin=0.05,
+        nodesep=0.42,
+        ranksep=0.58,
+        splines=polyline,
+        outputorder=edgesfirst
+    ];
+
+    node [
+        shape=box,
+        style="rounded,filled",
+        fillcolor="white",
+        color="#24364B",
+        penwidth=1.7,
+        fontname="DejaVu Sans",
+        fontsize=13,
+        margin="0.16,0.10"
+    ];
+
+    edge [
+        color="#40566F",
+        penwidth=1.6,
+        arrowsize=0.8,
+        fontname="DejaVu Sans Bold",
+        fontsize=11,
+        fontcolor="#24364B"
+    ];
+
+    start [
+        label="Timer fires\n(every 0.05 s / 20 Hz)",
+        shape=oval,
+        fillcolor="#EAF3FF",
+        color="#2563A6"
+    ];
+
+    eval_done [
+        label="evaluation_complete\nAND\nstop_on_evaluation_complete?",
+        shape=diamond,
+        style="filled",
+        fillcolor="#FFF7DD",
+        color="#A66B00"
+    ];
+    eval_stop [
+        label="Publish stop command\nmove_2D() → x=0, y=0, turn=0",
+        fillcolor="#FFF0F0",
+        color="#A63A3A"
+    ];
+    return_eval [label="Return", shape=oval, fillcolor="#F4F4F4"];
+
+    has_scan [
+        label="last_scan is None?",
+        shape=diamond,
+        style="filled",
+        fillcolor="#FFF7DD",
+        color="#A66B00"
+    ];
+    return_no_scan [
+        label="Return\n(no command published)",
+        shape=oval,
+        fillcolor="#F4F4F4"
+    ];
+
+    make_scan [label="scan = last_scan converted to\n1-D float array"];
+    scan_size [
+        label="scan length < 4?",
+        shape=diamond,
+        style="filled",
+        fillcolor="#FFF7DD",
+        color="#A66B00"
+    ];
+    short_stop [
+        label="Publish stop command\nmove_2D() → x=0, y=0, turn=0",
+        fillcolor="#FFF0F0",
+        color="#A63A3A"
+    ];
+    return_short [label="Return", shape=oval, fillcolor="#F4F4F4"];
+
+    preprocess [
+        label="get_front_scan(scan)\n→ points, indices, angles, ranges\nInitialize targets = []",
+        fillcolor="#EEF8F2",
+        color="#2F7A4D"
+    ];
+    blocked [
+        label="Obstacle in forward corridor?\n0 < point.x < stop_distance (0.6 m)\nAND |point.y| < 0.12 m",
+        shape=diamond,
+        style="filled",
+        fillcolor="#FFF7DD",
+        color="#A66B00"
+    ];
+
+    subgraph cluster_clear {
+        label="Front corridor clear";
+        labelloc="t";
+        fontsize=15;
+        fontname="DejaVu Sans Bold";
+        color="#79A9D1";
+        penwidth=1.5;
+        style="rounded";
+        bgcolor="#F7FBFF";
+
+        was_avoiding [
+            label="avoiding?",
+            shape=diamond,
+            style="filled",
+            fillcolor="#EAF3FF",
+            color="#2563A6"
+        ];
+        increment_clear [label="clear_count += 1", fillcolor="#EAF3FF", color="#2563A6"];
+        hold_check [
+            label="avoiding AND\nclear_count < 8?",
+            shape=diamond,
+            style="filled",
+            fillcolor="#EAF3FF",
+            color="#2563A6"
+        ];
+        reuse [
+            label="Keep previous avoidance motion\n(vx, vy) = last_command\ntarget = [vx, vy]",
+            fillcolor="#EAF3FF",
+            color="#2563A6"
+        ];
+        straight [
+            label="Reset avoidance state\navoiding = False; clear_count = 0\ngap_heading = None; side = 0\nside_lock_count = 0; missing_count = 0\nlast_command = (0, 0)\n\nCommand straight ahead\nvx = 0.3; vy = 0\ntarget = [look_ahead, 0]",
+            fillcolor="#EAF3FF",
+            color="#2563A6"
+        ];
+    }
+
+    subgraph cluster_blocked {
+        label="Front corridor blocked";
+        labelloc="t";
+        fontsize=15;
+        fontname="DejaVu Sans Bold";
+        color="#D08A8A";
+        penwidth=1.5;
+        style="rounded";
+        bgcolor="#FFF9F9";
+
+        enter_avoid [
+            label="avoiding = True\nclear_count = 0",
+            fillcolor="#FFF0F0",
+            color="#A63A3A"
+        ];
+        find_choose [
+            label="targets = find_gap_targets(points, indices)\ntarget = choose_gap(targets)",
+            fillcolor="#FFF0F0",
+            color="#A63A3A"
+        ];
+        target_found [
+            label="target found?",
+            shape=diamond,
+            style="filled",
+            fillcolor="#FFF7DD",
+            color="#A66B00"
+        ];
+        gap_motion [
+            label="Save gap-decision plot (rate-limited)\nNormalize target to direction\nvx = 0.18 × direction.x\nvy = 0.18 × direction.y\ngap_heading = atan2(target.y, target.x)\nmissing_count = 0",
+            fillcolor="#EEF8F2",
+            color="#2F7A4D"
+        ];
+        heading_left [
+            label="gap_heading > +5°?",
+            shape=diamond,
+            style="filled",
+            fillcolor="#FFF7DD",
+            color="#A66B00"
+        ];
+        set_left [label="side = +1 (left)", fillcolor="#EEF8F2", color="#2F7A4D"];
+        heading_right [
+            label="gap_heading < −5°?",
+            shape=diamond,
+            style="filled",
+            fillcolor="#FFF7DD",
+            color="#A66B00"
+        ];
+        set_right [label="side = −1 (right)", fillcolor="#EEF8F2", color="#2F7A4D"];
+        side_unchanged [label="Leave side unchanged", fillcolor="#EEF8F2", color="#2F7A4D"];
+        sidestep [
+            label="No usable gap\n(vx, vy) = get_sidestep_command(\n    points, angles, ranges)\ntarget = [vx, vy]",
+            fillcolor="#FFF0F0",
+            color="#A63A3A"
+        ];
+        remember [
+            label="last_command = (vx, vy)",
+            fillcolor="#FFF0F0",
+            color="#A63A3A"
+        ];
+    }
+
+    publish [
+        label="Print commanded velocity\nPublish move_2D(x=vx, y=vy, turn=0)\n(velocities are clipped inside move_2D)",
+        fillcolor="#E9F8F5",
+        color="#167A68",
+        penwidth=2.0
+    ];
+    end [label="End this timer cycle", shape=oval, fillcolor="#EAF3FF", color="#2563A6"];
+
+    start -> eval_done;
+    eval_done -> eval_stop [label="Yes"];
+    eval_stop -> return_eval;
+    eval_done -> has_scan [label="No"];
+    has_scan -> return_no_scan [label="Yes"];
+    has_scan -> make_scan [label="No"];
+    make_scan -> scan_size;
+    scan_size -> short_stop [label="Yes"];
+    short_stop -> return_short;
+    scan_size -> preprocess [label="No"];
+    preprocess -> blocked;
+
+    blocked -> was_avoiding [label="No"];
+    was_avoiding -> increment_clear [label="Yes"];
+    was_avoiding -> hold_check [label="No"];
+    increment_clear -> hold_check;
+    hold_check -> reuse [label="Yes"];
+    hold_check -> straight [label="No"];
+    reuse -> publish;
+    straight -> publish;
+
+    blocked -> enter_avoid [label="Yes"];
+    enter_avoid -> find_choose;
+    find_choose -> target_found;
+    target_found -> gap_motion [label="Yes"];
+    gap_motion -> heading_left;
+    heading_left -> set_left [label="Yes"];
+    heading_left -> heading_right [label="No"];
+    heading_right -> set_right [label="Yes"];
+    heading_right -> side_unchanged [label="No"];
+    set_left -> remember;
+    set_right -> remember;
+    side_unchanged -> remember;
+    target_found -> sidestep [label="No"];
+    sidestep -> remember;
+    remember -> publish;
+
+    publish -> end;
+}

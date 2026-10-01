@@ -1,0 +1,100 @@
+digraph CA1FrontClear {
+    graph [
+        label="CA1 detail — Front corridor clear",
+        labelloc="t",
+        fontsize=24,
+        fontname="DejaVu Sans Bold",
+        bgcolor="white",
+        pad=0.35,
+        nodesep=0.42,
+        ranksep=0.58,
+        splines=polyline,
+        outputorder=edgesfirst
+    ];
+    node [
+        shape=box,
+        style="rounded,filled",
+        fillcolor="white",
+        color="#2563A6",
+        penwidth=1.8,
+        fontname="DejaVu Sans",
+        fontsize=14,
+        margin="0.18,0.12"
+    ];
+    edge [
+        color="#40566F",
+        penwidth=1.7,
+        arrowsize=0.82,
+        fontname="DejaVu Sans Bold",
+        fontsize=12,
+        fontcolor="#24364B"
+    ];
+
+    start [
+        label="Entry from overview\nblocked = False",
+        shape=oval,
+        fillcolor="#EAF3FF"
+    ];
+    avoiding [
+        label="Currently avoiding?\nself.avoiding == True",
+        shape=diamond,
+        fillcolor="#FFF7DD",
+        color="#A66B00"
+    ];
+    increment [
+        label="Count this clear LiDAR reading\nclear_count += 1",
+        fillcolor="#EAF3FF"
+    ];
+    hysteresis [
+        label="Still avoiding AND\nclear_count < 8?",
+        shape=diamond,
+        fillcolor="#FFF7DD",
+        color="#A66B00"
+    ];
+    keep [
+        label="Keep the previous avoidance command\n(vx, vy) = last_command\ntarget = [vx, vy]",
+        fillcolor="#EAF3FF"
+    ];
+    reset [
+        label="Clear avoidance state\navoiding = False\nclear_count = 0\ngap_heading = None\nside = 0\nside_lock_count = 0\nmissing_count = 0\nlast_command = (0.0, 0.0)",
+        fillcolor="#EEF8F2",
+        color="#2F7A4D"
+    ];
+    straight [
+        label="Command forward motion\nvx = 0.3 m/s\nvy = 0.0 m/s\ntarget = [look_ahead, 0.0]",
+        fillcolor="#EEF8F2",
+        color="#2F7A4D"
+    ];
+    publish [
+        label="Print: Moving to x={vx}, y={vy}\nPublish move_2D(x=vx, y=vy, turn=0)\n(move_2D clips translation to ±0.4 m/s)",
+        fillcolor="#E9F8F5",
+        color="#167A68",
+        penwidth=2.0
+    ];
+    end [
+        label="End this timer cycle",
+        shape=oval,
+        fillcolor="#EAF3FF"
+    ];
+    note [
+        label="Hysteresis behavior\nClear readings 1–7 reuse last_command.\nOn clear reading 8, clear_count is no longer < 8,\nso avoidance is reset and the robot goes straight.",
+        shape=note,
+        fillcolor="#FFFCEB",
+        color="#9A7B16",
+        fontsize=12
+    ];
+
+    start -> avoiding;
+    avoiding -> increment [label="Yes"];
+    avoiding -> hysteresis [label="No"];
+    increment -> hysteresis;
+    hysteresis -> keep [label="Yes"];
+    hysteresis -> reset [label="No"];
+    reset -> straight;
+    keep -> publish;
+    straight -> publish;
+    publish -> end;
+
+    {rank=same; hysteresis; note;}
+    hysteresis -> note [style=dashed, arrowhead=none, color="#9A7B16", constraint=false];
+}

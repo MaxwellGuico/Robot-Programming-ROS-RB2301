@@ -1,0 +1,295 @@
+digraph CA1FrontBlocked {
+    graph [
+        label="CA1 detail — Front corridor blocked",
+        labelloc="t",
+        fontsize=24,
+        fontname="DejaVu Sans Bold",
+        bgcolor="white",
+        pad=0.38,
+        nodesep=0.38,
+        ranksep=0.56,
+        splines=polyline,
+        outputorder=edgesfirst
+    ];
+    node [
+        shape=box,
+        style="rounded,filled",
+        fillcolor="white",
+        color="#A63A3A",
+        penwidth=1.7,
+        fontname="DejaVu Sans",
+        fontsize=13,
+        margin="0.16,0.10"
+    ];
+    edge [
+        color="#40566F",
+        penwidth=1.6,
+        arrowsize=0.8,
+        fontname="DejaVu Sans Bold",
+        fontsize=11,
+        fontcolor="#24364B"
+    ];
+
+    start [
+        label="Entry from overview\nblocked = True",
+        shape=oval,
+        fillcolor="#FFF0F0"
+    ];
+    enter [
+        label="Enter avoidance mode\navoiding = True\nclear_count = 0",
+        fillcolor="#FFF0F0"
+    ];
+    gaps [
+        label="Find and choose a gap\ntargets = find_gap_targets(points, indices)\ntarget = choose_gap(targets)",
+        fillcolor="#FFF0F0"
+    ];
+    found [
+        label="target is not None?",
+        shape=diamond,
+        fillcolor="#FFF7DD",
+        color="#A66B00"
+    ];
+
+    subgraph cluster_gap {
+        label="Usable gap selected";
+        labelloc="t";
+        fontname="DejaVu Sans Bold";
+        fontsize=15;
+        color="#63A67C";
+        penwidth=1.5;
+        style="rounded";
+        bgcolor="#F7FCF8";
+
+        gap_move [
+            label="Save gap-decision plot (rate-limited)\ndirection = target / ||target||\nvx = 0.18 × direction.x\nvy = 0.18 × direction.y\ngap_heading = atan2(target.y, target.x)\nmissing_count = 0",
+            fillcolor="#EEF8F2",
+            color="#2F7A4D"
+        ];
+        left_heading [
+            label="gap_heading > +5°?",
+            shape=diamond,
+            fillcolor="#FFF7DD",
+            color="#A66B00"
+        ];
+        gap_left [
+            label="side = +1\nRemember LEFT as the sidestep side",
+            fillcolor="#EAF3FF",
+            color="#2563A6"
+        ];
+        right_heading [
+            label="gap_heading < −5°?",
+            shape=diamond,
+            fillcolor="#FFF7DD",
+            color="#A66B00"
+        ];
+        gap_right [
+            label="side = −1\nRemember RIGHT as the sidestep side",
+            fillcolor="#EAF3FF",
+            color="#2563A6"
+        ];
+        no_side_change [
+            label="Heading is within ±5°\nLeave side unchanged",
+            fillcolor="#EEF8F2",
+            color="#2F7A4D"
+        ];
+    }
+
+    subgraph cluster_sidestep {
+        label="No usable gap\nget_sidestep_command(points, angles, ranges) expanded";
+        labelloc="t";
+        fontname="DejaVu Sans Bold";
+        fontsize=15;
+        color="#7C72B8";
+        penwidth=1.5;
+        style="rounded";
+        bgcolor="#FAF9FF";
+
+        measure [
+            label="Measure side clearances\nright = median(ranges where angle < −30°)\nleft = median(ranges where angle > +30°)",
+            fillcolor="#F2F0FF",
+            color="#6557A6"
+        ];
+        lock_positive [
+            label="side_lock_count > 0?",
+            shape=diamond,
+            fillcolor="#FFF7DD",
+            color="#A66B00"
+        ];
+        decrement [
+            label="side_lock_count -= 1",
+            fillcolor="#F2F0FF",
+            color="#6557A6"
+        ];
+        side_zero [
+            label="side == 0?",
+            shape=diamond,
+            fillcolor="#FFF7DD",
+            color="#A66B00"
+        ];
+        more_left [
+            label="left > right?",
+            shape=diamond,
+            fillcolor="#FFF7DD",
+            color="#A66B00"
+        ];
+        choose_left [
+            label="side = +1 (LEFT)",
+            fillcolor="#EAF3FF",
+            color="#2563A6"
+        ];
+        choose_right [
+            label="side = −1 (RIGHT)",
+            fillcolor="#EAF3FF",
+            color="#2563A6"
+        ];
+        switch_to_right [
+            label="Lock expired AND side == +1\nAND right > left + 0.20 m?",
+            shape=diamond,
+            fillcolor="#FFF7DD",
+            color="#A66B00"
+        ];
+        set_right [
+            label="side = −1 (switch RIGHT)",
+            fillcolor="#EAF3FF",
+            color="#2563A6"
+        ];
+        switch_to_left [
+            label="Lock expired AND side == −1\nAND left > right + 0.20 m?",
+            shape=diamond,
+            fillcolor="#FFF7DD",
+            color="#A66B00"
+        ];
+        set_left [
+            label="side = +1 (switch LEFT)",
+            fillcolor="#EAF3FF",
+            color="#2563A6"
+        ];
+        keep_side [
+            label="Keep current side",
+            fillcolor="#F2F0FF",
+            color="#6557A6"
+        ];
+        check_side [
+            label="Is the current side corridor blocked?\n0 < points.y × side < 0.30 m\nAND |points.x| < required_gap / 2",
+            shape=diamond,
+            fillcolor="#FFF7DD",
+            color="#A66B00"
+        ];
+        check_opposite [
+            label="Is the opposite side corridor blocked?\n0 < points.y × (−side) < 0.30 m\nAND |points.x| < required_gap / 2",
+            shape=diamond,
+            fillcolor="#FFF7DD",
+            color="#A66B00"
+        ];
+        reverse_only [
+            label="Both sides blocked\nReturn vx = −0.08 m/s, vy = 0\n(immediate exit from helper)",
+            fillcolor="#FFF0F0",
+            color="#A63A3A"
+        ];
+        flip [
+            label="Opposite side is open\nside *= −1 (flip left ↔ right)\nside_lock_count = 12",
+            fillcolor="#EAF3FF",
+            color="#2563A6"
+        ];
+        missing [
+            label="missing_count >= 4?",
+            shape=diamond,
+            fillcolor="#FFF7DD",
+            color="#A66B00"
+        ];
+        clear_heading [
+            label="gap_heading = None",
+            fillcolor="#F2F0FF",
+            color="#6557A6"
+        ];
+        front_close [
+            label="Any front point closer than 0.20 m?\npoint.x > 0 AND\n|point.y| < required_gap / 2",
+            shape=diamond,
+            fillcolor="#FFF7DD",
+            color="#A66B00"
+        ];
+        vx_reverse [
+            label="vx = −0.08 m/s",
+            fillcolor="#FFF0F0",
+            color="#A63A3A"
+        ];
+        vx_zero [
+            label="vx = 0.0 m/s",
+            fillcolor="#F2F0FF",
+            color="#6557A6"
+        ];
+        lateral [
+            label="vy = 0.25 × side\nside = +1 → vy = +0.25 m/s → move LEFT\nside = −1 → vy = −0.25 m/s → move RIGHT\nReturn (vx, vy)",
+            fillcolor="#EAF3FF",
+            color="#2563A6",
+            penwidth=2.0
+        ];
+    }
+
+    remember [
+        label="last_command = (vx, vy)",
+        fillcolor="#FFF0F0"
+    ];
+    helper_result [
+        label="Back in timer_callback\ntarget = [vx, vy]",
+        fillcolor="#FFF0F0"
+    ];
+    publish [
+        label="Print: Moving to x={vx}, y={vy}\nPublish move_2D(x=vx, y=vy, turn=0)\n(move_2D clips translation to ±0.4 m/s)",
+        fillcolor="#E9F8F5",
+        color="#167A68",
+        penwidth=2.0
+    ];
+    end [
+        label="End this timer cycle",
+        shape=oval,
+        fillcolor="#FFF0F0"
+    ];
+    start -> enter -> gaps -> found;
+
+    found -> gap_move [label="Yes"];
+    gap_move -> left_heading;
+    left_heading -> gap_left [label="Yes"];
+    left_heading -> right_heading [label="No"];
+    right_heading -> gap_right [label="Yes"];
+    right_heading -> no_side_change [label="No"];
+    gap_left -> remember;
+    gap_right -> remember;
+    no_side_change -> remember;
+
+    found -> measure [label="No"];
+    measure -> lock_positive;
+    lock_positive -> decrement [label="Yes"];
+    lock_positive -> side_zero [label="No"];
+    decrement -> side_zero;
+    side_zero -> more_left [label="Yes"];
+    more_left -> choose_left [label="Yes"];
+    more_left -> choose_right [label="No"];
+    side_zero -> switch_to_right [label="No"];
+    switch_to_right -> set_right [label="Yes"];
+    switch_to_right -> switch_to_left [label="No"];
+    switch_to_left -> set_left [label="Yes"];
+    switch_to_left -> keep_side [label="No"];
+    choose_left -> check_side;
+    choose_right -> check_side;
+    set_right -> check_side;
+    set_left -> check_side;
+    keep_side -> check_side;
+    check_side -> check_opposite [label="Yes"];
+    check_side -> missing [label="No"];
+    check_opposite -> reverse_only [label="Yes"];
+    check_opposite -> flip [label="No"];
+    flip -> missing;
+    missing -> clear_heading [label="Yes"];
+    missing -> front_close [label="No"];
+    clear_heading -> front_close;
+    front_close -> vx_reverse [label="Yes"];
+    front_close -> vx_zero [label="No"];
+    vx_reverse -> lateral;
+    vx_zero -> lateral;
+    lateral -> helper_result;
+    reverse_only -> helper_result;
+    helper_result -> remember;
+
+    remember -> publish -> end;
+}

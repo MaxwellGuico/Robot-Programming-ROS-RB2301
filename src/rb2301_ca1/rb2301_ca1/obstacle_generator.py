@@ -1,16 +1,21 @@
+import json
 import numpy as np
 import xml.etree.ElementTree as ET
-import os
+from datetime import datetime
+from pathlib import Path
 
 height = 20
-size_div = 5
+size_div = 5# original is 5
 width = 22
 randomise = True # if false it will not change
 edge_case_spacing = 0.2
 
-workspace_directory = os.path.dirname(os.path.realpath(__file__))[:-22]
-overwrite_file =  workspace_directory + '/rb2301_gz/worlds/obstacle_world_ca1.sdf'
-obstacle_model = f'file:///{workspace_directory}/rb2301_gz/meshes/coke/6'
+source_directory = Path(__file__).resolve().parents[2]
+workspace_directory = source_directory.parent
+overwrite_file = source_directory / 'rb2301_gz/worlds/obstacle_world_ca1.sdf'
+obstacle_model = (source_directory / 'rb2301_gz/meshes/coke/6').as_uri()
+output_root = workspace_directory / 'ca1_runs'
+latest_run_file = output_root / 'latest_run.txt'
 
 def generate_maze():
     maze_arr = np.zeros((height, width))
@@ -65,6 +70,86 @@ def add_coke_element(x, y, n):
     obstacle.append(pose)
     return obstacle
 
+def create_run_directory():
+    """Create a unique folder for this generated obstacle environment."""
+    output_root.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    run_directory = output_root / timestamp
+    run_directory.mkdir()
+    latest_run_file.write_text(str(run_directory.resolve()), encoding="utf-8")
+    return run_directory
+
+def save_can_layout(maze_arr, x_step, y_step, scenario, run_directory):
+    save_environment_metadata(maze_arr, x_step, y_step, scenario, run_directory)
+    """Save a top-down JPEG of the exact can layout written to Gazebo."""
+    import matplotlib
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    can_rows, can_columns = np.nonzero(maze_arr)
+    can_x = can_rows * x_step
+    can_y = (can_columns - width / 2) * y_step
+
+    fig, ax = plt.subplots(figsize=(8, 10))
+    ax.scatter(
+        can_y,
+        can_x,
+        s=70,
+        color="firebrick",
+        edgecolors="black",
+        linewidths=0.4,
+        label="Cans",
+        zorder=2,
+    )
+    ax.scatter(
+        0.0,
+        0.0,
+        marker="^",
+        s=140,
+        color="royalblue",
+        edgecolors="black",
+        label="Robot start",
+        zorder=3,
+    )
+
+    padding = max(x_step, y_step)
+    ax.set_xlim(width / 2 * y_step + padding, -width / 2 * y_step - padding)
+    ax.set_ylim(-padding, height * x_step + padding)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_title(f"Generated can layout ({scenario})")
+    ax.set_xlabel("y (m, +left)")
+    ax.set_ylabel("x (m, +forward)")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    fig.savefig(run_directory / "can_layout.jpg", format="jpeg", dpi=150)
+    plt.close(fig)
+
+
+
+def save_environment_metadata(maze_arr, x_step, y_step, scenario, run_directory):
+    """Save the generated can positions and evaluation finish line."""
+    can_rows, can_columns = np.nonzero(maze_arr)
+    can_positions = [
+        {
+            "x": round(float(row * x_step), 10),
+            "y": round(float((column - width / 2) * y_step), 10),
+        }
+        for row, column in zip(can_rows, can_columns)
+    ]
+    metadata = {
+        "scenario": scenario,
+        "number_of_cans": len(can_positions),
+        "last_can_row_x": max(position["x"] for position in can_positions),
+        "coordinate_convention": "+x forward/up, +y left",
+        "can_positions": can_positions,
+    }
+    metadata_path = run_directory / "environment.json"
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
 def generate_sdf_file(scenario='random'):
     if not randomise and scenario == 'random':
         return
@@ -87,7 +172,7 @@ def generate_sdf_file(scenario='random'):
     # Random worlds retain their original 0.4 m row spacing. The deterministic
     # L-shaped cases use 0.2 m spacing so the perpendicular arm has no
     # robot-sized openings between consecutive cans.
-    x_step = 2 / size_div if scenario == 'random' else edge_case_spacing
+    x_step = 2 /5 if scenario == 'random' else edge_case_spacing
     y_step = 1 / size_div if scenario == 'random' else edge_case_spacing
 
     for x in range(height):  # Add in new obstacles
@@ -99,6 +184,11 @@ def generate_sdf_file(scenario='random'):
                 n += 1
 
     tree.write(overwrite_file)
+    run_directory = create_run_directory()
+    save_can_layout(maze_arr, x_step, y_step, scenario, run_directory)
+    save_environment_metadata(maze_arr, x_step, y_step, scenario, run_directory)
+    print(f"Saved environment images in {run_directory}")
+    return run_directory
 
 if __name__ == '__main__':
     generate_sdf_file()
