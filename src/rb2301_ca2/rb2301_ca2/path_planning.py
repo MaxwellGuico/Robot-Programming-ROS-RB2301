@@ -415,19 +415,11 @@ class WaypointNode(Node):
         def cost(node:SearchNode):
             return node.cost()
         start_node = SearchNode(cell=start,g=0,h=heuristic(start,goal),parent=None)
-        start_node.order = 0
-        next_order = 1
         
-        '''Different data structures for each'''
-        '''
-        OpenList is a list that turns into a heap queue. 
-        Best_g is dictionary that has the best g score for each node, that is updated. 
-        OpenList is not updated, you can have the same cell but different g value.
-        The dictionary is there to avoid finding through the heap (which is essentially a list, using list is O(n), dict uses O(1) average)'''
+        
         openList = [start_node] # List of SearchNode
-        best_g = {start_node.cell:start_node.g}
-        closedSet = set()
-        heapq.heapify(openList)
+        closedList = [] # List of SearchNode
+
         
 
         grid_size_x = self.map_array.shape[0]
@@ -435,17 +427,15 @@ class WaypointNode(Node):
 
         while openList:
             '''Get node with loweset f value'''
-            #current = openList[0] # Revist this, right now it assumes that the first one is the best f value
-            current = heapq.heappop(openList)
-            if current.g > best_g[current.cell]:
-                continue
+            current = openList[0] # Revist this, right now it assumes that the first one is the best f value
+
             # Check if we have reached the goal
             if current.cell == goal:
                 return self.reconstruct_path(current)
 
             # Move current node to the closed list
-            #openList.remove(current)
-            closedSet.add(current.cell)
+            openList.remove(current)
+            closedList.append(current)
 
             # Check all neighbouring nodes
             '''Check the 4 directions of cell, reject index that are negative or outside of grid size'''
@@ -459,22 +449,25 @@ class WaypointNode(Node):
             for neighbour in neighbours:
                 if neighbour is None:
                     continue # Skip invalid index nodes
-                if neighbour in closedSet:
+                if any(neighbour == node.cell for node in closedList):
                     continue # Skip evaluated node
 
                 # calculate tentative g score
                 tentative_g = current.g + 1 # Plus one since we are only looking at 4 directions one cell difference
-                # Both unseen and seen but better g score does require the same operations
-                if (neighbour not in best_g or tentative_g < best_g[neighbour]) and self.map_array[neighbour] == 0: # Using dictionary to search for g, also strict improvement removed equal sign
-                    '''check if neighbour is in NOT in best_g or tentative_g is better and is a free cell'''
+
+                for node in openList:
+                    if node.cell == neighbour:
+                        if tentative_g <= node.g:
+                            node.g = tentative_g
+                            node.f = node.g + node.h
+                            node.parent = current
+
+                if not any(neighbour == node.cell for node in openList) and self.map_array[neighbour] == 0: 
+                    '''check if neighbour is in NOT in open list and is a free cell'''
                     neighbourNode = SearchNode(parent=current,cell=neighbour,g=tentative_g,h=heuristic(neighbour, goal))
-                    neighbourNode.order = next_order
-                    next_order += 1
-                    #openList.append(neighbourNode)
-                    best_g[neighbourNode.cell] = tentative_g # update dictionary
-                    heapq.heappush(openList, neighbourNode) # push new node
-                
-            #openList.sort(key=cost)
+                    openList.append(neighbourNode)
+
+            openList.sort(key=cost)
         return [] # Failure case
     
 class Grid():
