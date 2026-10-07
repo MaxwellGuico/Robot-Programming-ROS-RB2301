@@ -71,7 +71,11 @@ def generate_launch_description():
         launch_arguments={
             'gz_args': [
                 path_world,
-                TextSubstitution(text=' -r -v -v1'), # for non-VBox users
+                TextSubstitution(text=(
+                    ' -s -r --headless-rendering -v -v1'
+                    if os.environ.get('RB2301_HEADLESS') == '1'
+                    else ' -r -v -v1'
+                )), # for non-VBox users
                 # TextSubstitution(text=' -r -v -v1 --render-engine ogre'), # DO NOT USE: this may cause the last reading for VBox users to become 0.05. -r for autorun, -v for verbose, v1 for level 1 verbose.
             ], 
         }.items()
@@ -127,5 +131,4 @@ def generate_launch_description():
     ld.add_action(gz_bridge_node)
 
     return ld
-
 

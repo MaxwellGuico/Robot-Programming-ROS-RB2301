@@ -1,4 +1,5 @@
 import json
+import os
 import numpy as np
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -7,7 +8,7 @@ from pathlib import Path
 height = 20
 size_div = 5# original is 5
 width = 22
-randomise = True # if false it will not change
+randomise = False # if false it will not change
 edge_case_spacing = 0.2
 
 source_directory = Path(__file__).resolve().parents[2]
@@ -18,6 +19,8 @@ output_root = workspace_directory / 'ca1_runs'
 latest_run_file = output_root / 'latest_run.txt'
 
 def generate_maze():
+    # np.random.seed(int(os.environ.get('RB2301_OBSTACLE_SEED', '1')))
+    # np.random.seed(5)
     maze_arr = np.zeros((height, width))
     maze_arr[2, int(width/2)] = 1
     for x in range(2, height-2):
@@ -150,15 +153,14 @@ def save_environment_metadata(maze_arr, x_step, y_step, scenario, run_directory)
         encoding="utf-8",
     )
 
-def generate_sdf_file(scenario='random'):
-    if not randomise and scenario == 'random':
+def generate_sdf_file(scenario='front_left'):
+    
+    if randomise and scenario == 'random':
         return
-
     if scenario == 'random':
         maze_arr = generate_maze()
     else:
         maze_arr = generate_edge_case(scenario)
-
     n = 1
     print(f"Generating {scenario} obstacle world...")
     tree = ET.parse(overwrite_file)

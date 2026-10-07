@@ -138,8 +138,10 @@ class WaypointNode(Node):
         self.waypoints = []
         self.current_waypoint_idx = 0
         self.goal_reached = True
-        
-
+        '''PID Variables'''
+        self.e_y_prev = None
+        self.e_x_prev = None
+        self.PID_prev_time = self.get_clock().now()
 
     def print_map(self):
         '''Prints the occupancy grid to the terminal: walls, your current position ('S'), all goal points ('W'/'G'),
@@ -193,14 +195,38 @@ class WaypointNode(Node):
         self.goal_reached = False
         self.waypoints = waypoints
         self.current_waypoint_idx = 0
-        
 
+    def current_xy_error(self,goal):
+        '''Calculate Current Error''' 
+        robot_point = (self.pose[0],self.pose[1])
+        '''Calculate Current Error'''            
+        e_x_current = goal[0]-robot_point[0]
+        e_y_current = goal[1]-robot_point[1]
+        return e_x_current, e_y_current
+    def PID(self, goal:tuple, Kp, Kd, K_theta):
+        e_x_current , e_y_current = self.current_xy_error(goal)
+        '''Clock for dt'''  
+        current_time = self.get_clock().now() # use only one, this works in nanoseconds so if i call again it will be a different timestamp
+        dt = current_time - self.PID_prev_time
+        if self.e_x_prev is None and self.e_y_prev is None:
+            self.e_x_prev = e_x_current
+            self.e_y_prev = e_y_current
+        Vx = Kp*(e_x_current) + Kd * ((e_x_current-self.e_x_prev)/((dt.nanoseconds/1e9))) if (dt.nanoseconds/1e9) > 1e-9 else Kp*(e_x_current)
+        Vy = Kp*(e_y_current) + Kd * ((e_y_current-self.e_y_prev)/((dt.nanoseconds/1e9))) if (dt.nanoseconds/1e9) > 1e-9 else Kp*(e_y_current)
+        w = K_theta * (0 - np.deg2rad(self.pose[2])) # Havent done PID for theta
+        '''Save prev errors and prev PID time'''
+        self.e_x_prev = e_x_current
+        self.e_y_prev = e_y_current
+        self.PID_prev_time = current_time
+
+        return Vx,Vy,w
+    
     def timer_callback(self):
         """Controller loop. Insert path planning and PID control logic here"""
         if self.pose is None:
             return # Does not run if no pose received from Odom or Optitrack
         self.get_logger().debug(f"Pose: {self.pose}")
-
+        '''Path Planner Logic'''
         # New goal
             # Make new path
             # self.goal_reached = False
@@ -209,44 +235,48 @@ class WaypointNode(Node):
             # Increase current_waypoint idx
             # Check if pose is goal
                 #if it is set goal_reached=True
-        robot_point = (self.pose[0],self.pose[1])
+        
         if not self.goal_reached and self.path:
-            current_waypoint = self.waypoints[self.current_waypoint_idx]
-            world_point = grid_to_world(current_waypoint[0],current_waypoint[1],origin=self.origin)
-            Ks = 4
+            current_waypoint_grid = self.waypoints[self.current_waypoint_idx]
+            current_waypoint_world = grid_to_world(current_waypoint_grid[0],current_waypoint_grid[1],origin=self.origin,resolution=self.resolution)
+            
+            ''' PD Parameters to tune'''
+            Kp = 2
+            Kd = 1
             K_theta = 1
             
-            Vx = Ks*(world_point[0]-robot_point[0])
-            Vy = Ks*(world_point[1]-robot_point[1])
-            w = K_theta * (0-np.deg2rad(self.pose[2]))
-            print(f"Moving (Vx={Vx},Vy={Vy}, w = {w})")
+            Vx, Vy , w = self.PID(current_waypoint_world, Kp,Kd,K_theta)
+            print(f"PID Velocities Given (Vx={Vx},Vy={Vy}, w = {w})")
             self.move_2D(Vx,Vy,w)
-            if abs(world_point[0]-robot_point[0]) < 0.05 and abs(world_point[1]-robot_point[1]) < 0.05 and self.current_waypoint_idx < len(self.waypoints)-1:
+            waypoint_error = self.current_xy_error(current_waypoint_world)
+            if abs(waypoint_error[0]) < 0.05 and abs(waypoint_error[1]) < 0.05 and self.current_waypoint_idx < len(self.waypoints)-1:
                 self.current_waypoint_idx += 1
-            if abs(self.goal_list[self.goal_idx][0]-robot_point[0]) < 0.05 and abs(self.goal_list[self.goal_idx][1]-robot_point[1]) < 0.05:
+                self.e_x_prev = None
+                self.e_y_prev = None
+            #if abs(self.goal_list[self.goal_idx][0]-robot_point[0]) < 0.05 and abs(self.goal_list[self.goal_idx][1]-robot_point[1]) < 0.05:
+            goal_error = self.current_xy_error(self.goal_list[self.goal_idx])
+            if abs(goal_error[0]) < 0.05 and abs(goal_error[1]) < 0.05:
                 self.goal_reached = True
                 self.move_2D(0,0)
         else:
             if self.goal_idx < len(self.goal_list) - 1:
                 self.goal_idx += 1 
-                curr_grid = world_to_grid(self.pose[0],self.pose[1],origin=self.origin)
-                goal_grid = world_to_grid(self.goal_list[self.goal_idx][0],self.goal_list[self.goal_idx][1],origin=self.origin)
+                curr_grid = world_to_grid(self.pose[0],self.pose[1],origin=self.origin,resolution=self.resolution)
+                goal_grid = world_to_grid(self.goal_list[self.goal_idx][0],self.goal_list[self.goal_idx][1],origin=self.origin,resolution=self.resolution)
                 self.path = self.Astar(curr_grid,goal_grid)
                 self.simplified_points = self.simplify_path(self.path)
                 self.set_waypoints(self.simplified_points)
                 self.goal_reached = False
+                '''Reset PID Variables'''
+                self.e_x_prev = None
+                self.e_y_prev = None
             else:
                 self.move_2D(0,0)
-
-            
             
         if self.path != self._last_printed_path: # Prints once immediately (map + start + goals), then again each time self.path changes
             self.print_map()
             self._last_printed_path = list(self.path)
-
-        # Next thing to working on
-        # 1. Yaw accumulation of drift
-        # 2. Simplify path
+        
     def reconstruct_path(self,current:SearchNode):
         path = []
         while current is not None:
