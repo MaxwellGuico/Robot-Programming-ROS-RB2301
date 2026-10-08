@@ -204,6 +204,10 @@ class WaypointNode(Node):
         '''PID Variables'''
         self.e_y_prev = None
         self.e_x_prev = None
+
+        self.error_distance_prev = None
+        self.error_heading_prev = None
+
         self.PID_prev_time = self.get_clock().now()
 
     def _print_calibration(self):
@@ -282,7 +286,7 @@ class WaypointNode(Node):
         '''Set new waypoints when a goal has been reached'''
         self.goal_reached = False
         self.waypoints = waypoints
-        self.current_waypoint_idx = 0
+        self.current_waypoint_idx = 1 if len(waypoints) > 1 else 0
     def current_xy_error(self,goal):
         '''Calculate Current Error''' 
         robot_point = (self.pose[0],self.pose[1])
@@ -290,23 +294,52 @@ class WaypointNode(Node):
         e_x_current = goal[0]-robot_point[0]
         e_y_current = goal[1]-robot_point[1]
         return e_x_current, e_y_current
-    def PID(self, goal:tuple, Kp, Kd, K_theta):
+    def PID(self, goal:tuple, Kp, Kd, Kp_theta, Kd_theta):
         e_x_current , e_y_current = self.current_xy_error(goal)
+        error_distance = math.sqrt(e_x_current*e_x_current + e_y_current*e_y_current)
+        desired_heading = np.arctan2(e_y_current,e_x_current)
+        current_heading = np.deg2rad(self.pose[2])
+        error_heading =   desired_heading - current_heading
+        error_heading = np.arctan2(
+            np.sin(error_heading),
+            np.cos(error_heading),
+
+        )
         '''Clock for dt'''  
         current_time = self.get_clock().now() # use only one, this works in nanoseconds so if i call again it will be a different timestamp
         dt = current_time - self.PID_prev_time
-        if self.e_x_prev is None and self.e_y_prev is None:
-            self.e_x_prev = e_x_current
-            self.e_y_prev = e_y_current
-        Vx = Kp*(e_x_current) + Kd * ((e_x_current-self.e_x_prev)/((dt.nanoseconds/1e9))) if (dt.nanoseconds/1e9) > 1e-9 else Kp*(e_x_current)
-        Vy = Kp*(e_y_current) + Kd * ((e_y_current-self.e_y_prev)/((dt.nanoseconds/1e9))) if (dt.nanoseconds/1e9) > 1e-9 else Kp*(e_y_current)
-        w = K_theta * (0 - np.deg2rad(self.pose[2])) # Havent done PID for theta
-        '''Save prev errors and prev PID time'''
-        self.e_x_prev = e_x_current
-        self.e_y_prev = e_y_current
-        self.PID_prev_time = current_time
+        if self.error_distance_prev is None and self.error_heading_prev is None:
+            self.error_distance_prev = error_distance
+            self.error_heading_prev = error_heading
+        # Vx = Kp*(e_x_current) + Kd * ((e_x_current-self.e_x_prev)/((dt.nanoseconds/1e9))) if (dt.nanoseconds/1e9) > 1e-9 else Kp*(e_x_current)
+        # Vy = Kp*(e_y_current) + Kd * ((e_y_current-self.e_y_prev)/((dt.nanoseconds/1e9))) if (dt.nanoseconds/1e9) > 1e-9 else Kp*(e_y_current)
+        Vx = Kp*(error_distance) + Kd * ((error_distance-self.error_distance_prev)/((dt.nanoseconds/1e9)))\
+            if (dt.nanoseconds/1e9) > 1e-9 else Kp*(error_distance)
+        Vx = np.clip(Vx, 0.0, max_translate_velocity)
+        Vx *= max(0.0, 0.5 * np.cos(error_heading)) # Slows down during turning
+        Vy = 0
+        w =  Kp_theta * error_heading + Kd_theta* ((error_heading-self.error_heading_prev)/((dt.nanoseconds/1e9))) \
+                   if (dt.nanoseconds/1e9) > 1e-9 else Kp_theta *(error_heading)
+        
 
-        return Vx,Vy,w
+        self.get_logger().debug(f"Error Distance: {error_distance} Turning Correction Applied: {max(0.0, np.cos(error_heading))} Vx: {Vx}")
+        
+        self.get_logger().debug(f"Desired Heading: {desired_heading} Current Heading: {current_heading} Error Heading: {error_heading} Angular z: {w}")
+        
+        '''Save prev errors and prev PID time'''
+        #self.e_x_prev = e_x_current
+        #self.e_y_prev = e_y_current
+        self.error_distance_prev = error_distance
+        self.error_heading_prev = error_heading
+        self.PID_prev_time = current_time
+        '''if w > 0.05:
+            return 0,0,w
+        else:
+            return Vx,Vy,w'''
+        return Vx, Vy,w # IM JUST CHECKING W
+    def reset_pid(self):
+        self.error_heading_prev = None
+        self.error_distance_prev = None
     def timer_callback(self):
         """Controller loop. Insert path planning and PID control logic here"""
         if self.pose is None:
@@ -328,6 +361,7 @@ class WaypointNode(Node):
             self._last_printed_path = list(self.path)
 
         self.get_logger().debug(f"Pose: {self.pose}")
+        
         '''Path Planner Logic'''
         # New goal
             # Make new path
@@ -340,20 +374,20 @@ class WaypointNode(Node):
         if not self.goal_reached and self.path: # If same goal and available path
             current_waypoint_grid = self.waypoints[self.current_waypoint_idx]
             current_waypoint_world = grid_to_world(current_waypoint_grid[0],current_waypoint_grid[1],origin=self.origin,resolution=self.resolution)
-            
+            self.get_logger().debug(f"Waypoint: {current_waypoint_world}")
             ''' PD Parameters to tune'''
-            Kp = 2
-            Kd = 1
-            K_theta = 1
-            
-            Vx, Vy , w = self.PID(current_waypoint_world, Kp,Kd,K_theta)
-            print(f"PID Velocities Given (Vx={Vx},Vy={Vy}, w = {w})")
+            Kp = 3
+            Kd = 0.8
+            Kp_theta = 2
+            Kd_theta = 0
+            Vx, Vy , w = self.PID(current_waypoint_world, Kp,Kd,Kp_theta,Kd_theta)
+            # print(f"PID Velocities Given (Vx={Vx},Vy={Vy}, w = {w})")
             self.move_2D(Vx,Vy,w)
+            #self.move_2D(0.05,0,0)
             waypoint_error = self.current_xy_error(current_waypoint_world)
             if abs(waypoint_error[0]) < 0.05 and abs(waypoint_error[1]) < 0.05 and self.current_waypoint_idx < len(self.waypoints)-1:
                 self.current_waypoint_idx += 1
-                self.e_x_prev = None
-                self.e_y_prev = None
+                self.reset_pid()
             #if abs(self.goal_list[self.goal_idx][0]-robot_point[0]) < 0.05 and abs(self.goal_list[self.goal_idx][1]-robot_point[1]) < 0.05:
             goal_error = self.current_xy_error(self.goal_list[self.goal_idx])
             if abs(goal_error[0]) < 0.05 and abs(goal_error[1]) < 0.05:
@@ -369,8 +403,7 @@ class WaypointNode(Node):
                 self.set_waypoints(self.simplified_points)
                 self.goal_reached = False
                 '''Reset PID Variables'''
-                self.e_x_prev = None
-                self.e_y_prev = None
+                self.reset_pid()
             else:
                 self.move_2D(0,0)
             
