@@ -194,6 +194,7 @@ class WaypointNode(Node):
         self.pose = None
         self.path = [] # Set this to your planned route (a list of grid-index tuples, in travel order) once you've computed it -- it'll automatically show up in the terminal map print
         self.simplified_points = [] # Reduced points
+        self.cumulative_dist_segments = [0.0]
 
         '''Tracking the indices of goal_index and waypoint_index from self.path'''
         self.goal_idx = -1
@@ -202,13 +203,16 @@ class WaypointNode(Node):
         self.goal_reached = True
         self._last_printed_path = None
         '''PID Variables'''
-        self.e_y_prev = None
-        self.e_x_prev = None
-
         self.error_distance_prev = None
         self.error_heading_prev = None
-
         self.PID_prev_time = self.get_clock().now()
+        '''Carrot Variables'''
+        self.path_progress = 0.0 # Initialise as 0
+        self.current_segment_idx = 0
+        '''Corner Aware Speed Regulator'''
+        self.is_cornering = False
+        self.corner_idx = None
+
 
     def _print_calibration(self):
         '''--calibrate: twice a second, print the raw Optitrack pose next to the maze-frame pose and grid cell.'''
@@ -287,6 +291,14 @@ class WaypointNode(Node):
         self.goal_reached = False
         self.waypoints = waypoints
         self.current_waypoint_idx = 1 if len(waypoints) > 1 else 0
+
+        '''Reset Carrot'''
+        self.path_progress = 0.0 
+        self.current_segment_idx = 0
+        '''Corner Aware Speed Regulator'''
+        self.is_cornering = False
+        self.corner_idx = None
+        
     def current_xy_error(self,goal):
         '''Calculate Current Error''' 
         robot_point = (self.pose[0],self.pose[1])
@@ -311,8 +323,6 @@ class WaypointNode(Node):
         if self.error_distance_prev is None and self.error_heading_prev is None:
             self.error_distance_prev = error_distance
             self.error_heading_prev = error_heading
-        # Vx = Kp*(e_x_current) + Kd * ((e_x_current-self.e_x_prev)/((dt.nanoseconds/1e9))) if (dt.nanoseconds/1e9) > 1e-9 else Kp*(e_x_current)
-        # Vy = Kp*(e_y_current) + Kd * ((e_y_current-self.e_y_prev)/((dt.nanoseconds/1e9))) if (dt.nanoseconds/1e9) > 1e-9 else Kp*(e_y_current)
         Vx = Kp*(error_distance) + Kd * ((error_distance-self.error_distance_prev)/((dt.nanoseconds/1e9)))\
             if (dt.nanoseconds/1e9) > 1e-9 else Kp*(error_distance)
         Vx = np.clip(Vx, 0.0, max_translate_velocity)
@@ -327,90 +337,16 @@ class WaypointNode(Node):
         self.get_logger().debug(f"Desired Heading: {desired_heading} Current Heading: {current_heading} Error Heading: {error_heading} Angular z: {w}")
         
         '''Save prev errors and prev PID time'''
-        #self.e_x_prev = e_x_current
-        #self.e_y_prev = e_y_current
+
         self.error_distance_prev = error_distance
         self.error_heading_prev = error_heading
         self.PID_prev_time = current_time
-        '''if w > 0.05:
-            return 0,0,w
-        else:
-            return Vx,Vy,w'''
-        return Vx, Vy,w # IM JUST CHECKING W
+
+        return Vx, Vy,w 
     def reset_pid(self):
         self.error_heading_prev = None
         self.error_distance_prev = None
-    def timer_callback(self):
-        """Controller loop. Insert path planning and PID control logic here"""
-        if self.pose is None:
-            return # Does not run if no pose received from Odom or Optitrack
-        now = time.time()
-        if now - getattr(self, "_last_pose_log", 0.0) >= 1.0: # at most once a second, so it does not bury the map / warnings below
-            self._last_pose_log = now
-            self.get_logger().debug(f"Pose: {self.pose}")
 
-        if self.calibrate:
-            self._print_calibration()
-            return # Calibration mode: look, don't drive
-
-        self._check_start_once()
-        
-
-        if self.path != self._last_printed_path: # Prints once immediately (map + start + goals), then again each time self.path changes
-            self.print_map()
-            self._last_printed_path = list(self.path)
-
-        self.get_logger().debug(f"Pose: {self.pose}")
-        
-        '''Path Planner Logic'''
-        # New goal
-            # Make new path
-            # self.goal_reached = False
-        # Still same goal
-            #Continue waypoints
-            # Increase current_waypoint idx
-            # Check if pose is goal
-                #if it is set goal_reached=True
-        if not self.goal_reached and self.path: # If same goal and available path
-            current_waypoint_grid = self.waypoints[self.current_waypoint_idx]
-            current_waypoint_world = grid_to_world(current_waypoint_grid[0],current_waypoint_grid[1],origin=self.origin,resolution=self.resolution)
-            self.get_logger().debug(f"Waypoint: {current_waypoint_world}")
-            ''' PD Parameters to tune'''
-            Kp = 3
-            Kd = 0.8
-            Kp_theta = 2
-            Kd_theta = 0
-            Vx, Vy , w = self.PID(current_waypoint_world, Kp,Kd,Kp_theta,Kd_theta)
-            # print(f"PID Velocities Given (Vx={Vx},Vy={Vy}, w = {w})")
-            self.move_2D(Vx,Vy,w)
-            #self.move_2D(0.05,0,0)
-            waypoint_error = self.current_xy_error(current_waypoint_world)
-            if abs(waypoint_error[0]) < 0.05 and abs(waypoint_error[1]) < 0.05 and self.current_waypoint_idx < len(self.waypoints)-1:
-                self.current_waypoint_idx += 1
-                self.reset_pid()
-            #if abs(self.goal_list[self.goal_idx][0]-robot_point[0]) < 0.05 and abs(self.goal_list[self.goal_idx][1]-robot_point[1]) < 0.05:
-            goal_error = self.current_xy_error(self.goal_list[self.goal_idx])
-            if abs(goal_error[0]) < 0.05 and abs(goal_error[1]) < 0.05:
-                self.goal_reached = True
-                self.move_2D(0,0)
-        else: # If new goal
-            if self.goal_idx < len(self.goal_list) - 1:
-                self.goal_idx += 1 
-                curr_grid = world_to_grid(self.pose[0],self.pose[1],origin=self.origin,resolution=self.resolution)
-                goal_grid = world_to_grid(self.goal_list[self.goal_idx][0],self.goal_list[self.goal_idx][1],origin=self.origin,resolution=self.resolution)
-                self.path = self.Astar(curr_grid,goal_grid)
-                self.simplified_points = self.simplify_path(self.path)
-                self.set_waypoints(self.simplified_points)
-                self.goal_reached = False
-                '''Reset PID Variables'''
-                self.reset_pid()
-            else:
-                self.move_2D(0,0)
-            
-        if self.path != self._last_printed_path: # Prints once immediately (map + start + goals), then again each time self.path changes
-            self.print_map()
-            self._last_printed_path = list(self.path)
-            
     def reconstruct_path(self,current:SearchNode):
         path = []
         while current is not None:
@@ -502,6 +438,180 @@ class WaypointNode(Node):
 
             openList.sort(key=cost)
         return [] # Failure case
+    def get_carrot(self,robot_curr_position:tuple,path,look_ahead_dist):
+        
+        '''
+        ### robot_curr_position
+            - (x,y) position of the robot, do not give heading
+        ### look_ahead_dist: distance of carrot
+        ### path: list of points to the goal
+        For N waypoints,
+            N Path World Coord
+            N - 1 Length segments
+            N Cumulative Distance Segments
+            0 <= self.current_segment_idx <= N - 2
+            To adv to next segment, 0 <= self.current_segment_idx < N - 2
+        '''
+        if len(path) < 2:
+            return False
+
+        path_world_coord = [grid_to_world(grid_coord[0],grid_coord[1],origin=self.origin,resolution=self.resolution) for grid_coord in path]
+        length_segments = []
+        t = 0.0 
+        
+        for i in range(len(path_world_coord)):
+            if 0 < i:
+                length_segments.append(math.dist(path_world_coord[i-1],path_world_coord[i]))
+        if sum(length_segments) <= 1e-9:
+                return path_world_coord[-1]
+        self.cumulative_dist_segments = [0.0]
+        for length in length_segments:
+            self.cumulative_dist_segments.append(length + self.cumulative_dist_segments[-1])
+        
+        while True:
+        # Calculate AB, AR and t
+            A = np.array(path_world_coord[self.current_segment_idx])
+            B = np.array(path_world_coord[self.current_segment_idx + 1])
+            R = np.array(robot_curr_position)
+            AB = B - A
+            if np.linalg.norm(AB) <= 1e-9: # If the length segment is 0
+                if self.current_segment_idx == len(path_world_coord) - 2 : # If its the maximum segment idx to check
+                    t = 0.0 # Ensure t resets to 0
+                    break
+                self.current_segment_idx += 1 # Move to the next length segment since this one is 0
+                continue
+            AR = R - A
+            t = max(0, min(1,np.dot(AR,AB) / np.dot(AB,AB))) # This ensures that the t given is on the line segment selected
+
+        # If t more than 95% switch
+            # When im on line segment 1, it is from point 1 to point 2
+            if t >= 0.95 and self.current_segment_idx < len(path_world_coord) - 2: # Maximum segment_idx = N - 2
+                self.current_segment_idx += 1 
+                continue
+            break
+        P_projected = np.array(path_world_coord[self.current_segment_idx]) + t * (AB) 
+        distance_to_projected = np.linalg.norm(P_projected-np.array(robot_curr_position)) # TO be used for debugging
+        s_projected = self.cumulative_dist_segments[self.current_segment_idx] + t *length_segments[self.current_segment_idx] # length projected
+        self.path_progress = max(self.path_progress, s_projected)  # S[i] + t * Li # Cumulative progress s of projection
+
+
+        s_carrot = min(self.path_progress + look_ahead_dist, self.cumulative_dist_segments[-1])
+        segment = 0 # this would be the segment that the carrot should be in 
+        while segment < len(length_segments) and length_segments[segment] <= 1e-9: # find the initial segment index that doesnt have a zero segment length
+            segment += 1
+
+        for idx in range(len(self.cumulative_dist_segments) - 1):
+            if length_segments[idx] <= 1e-9:
+                continue
+            if self.cumulative_dist_segments[idx] <= s_carrot <= self.cumulative_dist_segments[idx + 1]:
+                segment = idx
+                break
+
+        d_in_segment = s_carrot - self.cumulative_dist_segments[segment]
+        alpha = d_in_segment / length_segments[segment]
+        carrot_A = np.array(path_world_coord[segment])
+        carrot_B = np.array(path_world_coord[segment + 1])
+        carrot = carrot_A + alpha * (carrot_B - carrot_A)
+
+        self.get_logger().debug(
+            f"Robot Segment: {self.current_segment_idx}, "
+            f"Carrot Segment: {segment}, "
+            f"Progress: {self.path_progress:.3f}, "
+            f"Carrot: {tuple(carrot)}"
+            f"t value: {t*100}%"
+        )
+
+        return tuple(carrot)
+
+    def timer_callback(self):
+        """Controller loop. Insert path planning and PID control logic here"""
+        if self.pose is None:
+            return # Does not run if no pose received from Odom or Optitrack
+        now = time.time()
+        if now - getattr(self, "_last_pose_log", 0.0) >= 1.0: # at most once a second, so it does not bury the map / warnings below
+            self._last_pose_log = now
+            self.get_logger().debug(f"Pose: {self.pose}")
+
+        if self.calibrate:
+            self._print_calibration()
+            return # Calibration mode: look, don't drive
+
+        self._check_start_once()
+        
+
+        if self.path != self._last_printed_path: # Prints once immediately (map + start + goals), then again each time self.path changes
+            self.print_map()
+            self._last_printed_path = list(self.path)
+
+        self.get_logger().debug(f"Pose: {self.pose}")
+        
+        '''Path Planner Logic'''
+        # New goal
+            # Make new path
+            # self.goal_reached = False
+        # Still same goal
+            # Get Carrot
+            # Check if pose is goal
+                #if it is set goal_reached=True
+        if not self.goal_reached and self.path: # If same goal and available path
+            carrot = self.get_carrot(
+                robot_curr_position=self.pose[:2],
+                path = self.simplified_points,
+                look_ahead_dist=0.2
+            )
+
+            ''' PD Parameters to tune'''
+            Kp = 3
+            Kd = 0.8
+            Kp_theta = 3
+            Kd_theta = 0.8
+            k_corner = 0.5
+            d_to_corner  = 0.5
+            if carrot is False:
+                self.get_logger().error("Carrot generation failed!")
+                self.move_2D(0, 0, 0)
+                return
+            
+            #self.get_logger().debug(f"Robot Pose: {self.pose[:2]}")
+            self.get_logger().debug(f"Path generated(Simplified) : {self.simplified_points}")
+            #self.get_logger().debug(f"Segment the robot is following: {self.current_segment_idx}")
+            #self.get_logger().debug(f"Carrot Point: {carrot}")
+           
+            self.get_logger().debug(
+                f"Path Progress: {self.path_progress:.3f} m"
+            )
+            v_final, vy , w = self.PID(carrot, Kp,Kd,Kp_theta,Kd_theta)
+
+
+            self.move_2D(v_final, vy, w)
+
+
+            self.get_logger().debug(f"Velocities Given (Vx={v_final},Vy={vy}, w = {w})")
+
+
+            goal_error = self.current_xy_error(self.goal_list[self.goal_idx])
+            if abs(goal_error[0]) < 0.05 and abs(goal_error[1]) < 0.05:
+                self.goal_reached = True
+                self.move_2D(0,0)
+        else: # If new goal
+            if self.goal_idx < len(self.goal_list) - 1:
+                self.goal_idx += 1 
+                curr_grid = world_to_grid(self.pose[0],self.pose[1],origin=self.origin,resolution=self.resolution)
+                goal_grid = world_to_grid(self.goal_list[self.goal_idx][0],self.goal_list[self.goal_idx][1],origin=self.origin,resolution=self.resolution)
+                self.path = self.Astar(curr_grid,goal_grid)
+                self.simplified_points = self.simplify_path(self.path)
+                self.set_waypoints(self.simplified_points)
+                self.goal_reached = False
+                '''Reset PID Variables'''
+                self.reset_pid()
+            else:
+                self.move_2D(0,0)
+            
+        if self.path != self._last_printed_path: # Prints once immediately (map + start + goals), then again each time self.path changes
+            self.print_map()
+            self._last_printed_path = list(self.path)
+            
+
     
 class Grid():
     '''
