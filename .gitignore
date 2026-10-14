@@ -4,3 +4,8 @@
 /install
 /log
 /ca1_runs
+/ca2_runs
+/.agents
+/.aws
+/.codex
+.gitignore

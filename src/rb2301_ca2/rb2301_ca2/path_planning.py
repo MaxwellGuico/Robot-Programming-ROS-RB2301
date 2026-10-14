@@ -3,14 +3,21 @@ import configparser
 import json
 import math
 import os
+from pathlib import Path
+import sys
 import time
 import ast
 
 import numpy as np
 import heapq
 import rclpy
+from rcl_interfaces.msg import SetParametersResult
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.logging import set_logger_level, LoggingSeverity
+from rclpy.parameter import Parameter
+from rclpy.utilities import remove_ros_args
+import yaml
 
 from rclpy.qos import (
     ReliabilityPolicy,
@@ -64,6 +71,16 @@ sim_config = {
 }
 
 IRL_RUNS = ("test1", "test2", "full")
+
+RUNTIME_PARAMETER_DEFAULTS = {
+    "kp": 3.0,
+    "kd": 0.8,
+    "kp_theta": 3.0,
+    "kd_theta": 0.8,
+    "look_ahead_dist": 0.15,
+    "goal_tolerance": 0.05,
+    "generate_image": True,
+}
 
 
 # --- Real maze <-> Optitrack frame -------------------------------------------
@@ -157,11 +174,22 @@ class SearchNode:
 class WaypointNode(Node):
     '''Node to calculate path and move robot towards given goal_coordinates, using pose info from either gazebo odometer or optitrack'''
     def __init__(self, map_array:np.array, goal_list:list, is_simulation:bool=True, origin:tuple=(0.0, 0.0), resolution:float=occupancy_grid_resolution,
-                 frame:dict=None, robot_number:int=5, expected_start:tuple=None, calibrate:bool=False):
-        super().__init__('waypoint')
+                 frame:dict=None, robot_number:int=5, expected_start:tuple=None, calibrate:bool=False,
+                 run:str=None, params_output_path:str=None):
+        self._images_disabled = run in ("test1", "test2")
+        image_override = [Parameter("generate_image", value=False)] if self._images_disabled else None
+        super().__init__('waypoint', parameter_overrides=image_override)
         self.get_logger().info("Starting WaypointNode")
 
         self.is_simulation = is_simulation
+        self.params_output_path = Path(params_output_path) if params_output_path else None
+        self.add_on_set_parameters_callback(self._validate_runtime_parameters)
+        for name, default in RUNTIME_PARAMETER_DEFAULTS.items():
+            self.declare_parameter(name, default)
+        self.add_post_set_parameters_callback(self._runtime_parameters_changed)
+        self.save_runtime_parameters()
+        if self._images_disabled:
+            self.get_logger().info(f"Image creation disabled for --run {run}")
 
         # Subscribe to the dynamic_pose topic from Gazebo that publishes ground-truth pose data
         if self.is_simulation:
@@ -209,9 +237,46 @@ class WaypointNode(Node):
         '''Carrot Variables'''
         self.path_progress = 0.0 # Initialise as 0
         self.current_segment_idx = 0
-        '''Corner Aware Speed Regulator'''
-        self.is_cornering = False
-        self.corner_idx = None
+
+
+    def _validate_runtime_parameters(self, parameters):
+        for parameter in parameters:
+            if parameter.name not in RUNTIME_PARAMETER_DEFAULTS:
+                continue
+            value = parameter.value
+            if parameter.name == "generate_image":
+                if not isinstance(value, bool):
+                    return SetParametersResult(successful=False, reason="generate_image must be a boolean")
+                if self._images_disabled and value:
+                    return SetParametersResult(successful=False, reason="Image creation is disabled for test1 and test2")
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                return SetParametersResult(successful=False, reason=f"{parameter.name} must be a finite number")
+            positive = parameter.name in ("look_ahead_dist", "goal_tolerance")
+            if value < 0.0 or (positive and value == 0.0):
+                bound = "positive" if positive else "non-negative"
+                return SetParametersResult(successful=False, reason=f"{parameter.name} must be {bound}")
+        return SetParametersResult(successful=True)
+
+    def save_runtime_parameters(self):
+        '''Save the effective settings as a reusable ROS parameter YAML file.'''
+        if self.params_output_path is None:
+            return
+        names = list(RUNTIME_PARAMETER_DEFAULTS) + ["use_sim_time"]
+        values = {parameter.name: parameter.value for parameter in self.get_parameters(names)}
+        self.params_output_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = self.params_output_path.with_suffix(".yaml.tmp")
+        with temporary_path.open("w") as stream:
+            yaml.safe_dump({self.get_fully_qualified_name(): {"ros__parameters": values}}, stream, sort_keys=False)
+        os.replace(temporary_path, self.params_output_path)
+        self.get_logger().info(f"Runtime parameters saved to {self.params_output_path}")
+
+    def _runtime_parameters_changed(self, parameters):
+        if any(parameter.name in RUNTIME_PARAMETER_DEFAULTS or parameter.name == "use_sim_time" for parameter in parameters):
+            try:
+                self.save_runtime_parameters()
+            except OSError as error:
+                self.get_logger().error(f"Could not save runtime parameters: {error}")
 
 
     def _print_calibration(self):
@@ -248,8 +313,8 @@ class WaypointNode(Node):
         goal_cells = [clip(world_to_grid(gx, gy, self.origin, self.resolution)) for gx, gy in self.goal_list]
         grid = Grid(self.map_array, starting_position=current_cell, goal_position=goal_cells[-1])
         grid.print_grid_map(waypoints=goal_cells, path=self.path)
-        # ADDED THIS
-        grid.draw_grid_map(simplified_points=self.simplified_points,waypoints=goal_cells,path=self.path,save_path='path_result.png')
+        if self.get_parameter("generate_image").value:
+            grid.draw_grid_map(simplified_points=self.simplified_points,waypoints=goal_cells,path=self.path,save_path='path_result.png')
 
     def yaw_from_quaternion(self, q):
         '''Returns yaw angle (in rad) for orientation based on given quaternion input q'''
@@ -557,16 +622,15 @@ class WaypointNode(Node):
             carrot = self.get_carrot(
                 robot_curr_position=self.pose[:2],
                 path = self.simplified_points,
-                look_ahead_dist=0.2
+                look_ahead_dist=self.get_parameter("look_ahead_dist").value
             )
 
             ''' PD Parameters to tune'''
-            Kp = 3
-            Kd = 0.8
-            Kp_theta = 3
-            Kd_theta = 0.8
-            k_corner = 0.5
-            d_to_corner  = 0.5
+            Kp = self.get_parameter("kp").value
+            Kd = self.get_parameter("kd").value
+            Kp_theta = self.get_parameter("kp_theta").value
+            Kd_theta = self.get_parameter("kd_theta").value
+
             if carrot is False:
                 self.get_logger().error("Carrot generation failed!")
                 self.move_2D(0, 0, 0)
@@ -590,7 +654,8 @@ class WaypointNode(Node):
 
 
             goal_error = self.current_xy_error(self.goal_list[self.goal_idx])
-            if abs(goal_error[0]) < 0.05 and abs(goal_error[1]) < 0.05:
+            goal_tolerance = self.get_parameter("goal_tolerance").value
+            if abs(goal_error[0]) < goal_tolerance and abs(goal_error[1]) < goal_tolerance:
                 self.goal_reached = True
                 self.move_2D(0,0)
         else: # If new goal
@@ -786,12 +851,17 @@ def main(args=None):
         '--calibrate', action='store_true',
         help="Real robot: only print Optitrack and maze-frame poses (twice a second) and never publish cmd_vel. Use it to set origin/rotation."
     )
-    cli_args, ros_args = arg_parser.parse_known_args(args=args)
+    arg_parser.add_argument(
+        '--save-params', default=None,
+        help="Save the effective runtime parameters to this YAML file at startup and whenever they change."
+    )
+    process_args = sys.argv if args is None else [sys.argv[0], *args]
+    cli_args = arg_parser.parse_args(remove_ros_args(args=process_args)[1:])
     run = cli_args.run or ("test1" if cli_args.calibrate else None)
     is_simulation = run is None # Remember: pass --run test1|test2|full to ca2.sh when testing on the real lab setup
 
     print("Starting path planning")
-    rclpy.init(args=ros_args)
+    rclpy.init(args=process_args)
 
     robot_number = 3
     frame = expected_start = None
@@ -819,16 +889,18 @@ def main(args=None):
 
     map_array = np.load(os.path.join(_PACKAGE_DIR, config["map_file"]), allow_pickle=True)
     waypoint = WaypointNode(map_array, config["goal_list"], is_simulation, config["origin"], config["resolution"],
-                            frame=frame, robot_number=robot_number, expected_start=expected_start, calibrate=cli_args.calibrate)
+                            frame=frame, robot_number=robot_number, expected_start=expected_start, calibrate=cli_args.calibrate,
+                            run=run, params_output_path=cli_args.save_params)
 
     # Start spinning the waypoint node and only stop once SystemExit error is raised within the node callback
     try:
         rclpy.spin(waypoint)
-    except SystemExit:
+    except (SystemExit, KeyboardInterrupt, ExternalShutdownException):
         print("Shutting down")
-
-    waypoint.destroy_node()
-    rclpy.shutdown()
+    finally:
+        waypoint.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

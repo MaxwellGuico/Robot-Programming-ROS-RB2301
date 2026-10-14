@@ -1,0 +1,10 @@
+waypoint:
+  ros__parameters:
+    kp: 3.0
+    kd: 0.8
+    kp_theta: 3.0
+    kd_theta: 0.8
+    look_ahead_dist: 0.20
+    goal_tolerance: 0.05
+    # test1 and test2 always force image creation off.
+    generate_image: true
